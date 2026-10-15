@@ -1,0 +1,14 @@
+[workspace]
+authors = ["Corey Baron <cbaron4@uwo.ca>"]
+channels = ["conda-forge"]
+name = "dcmFix"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = ">=3.14.8,<3.15"
+
+[pypi-dependencies]
+pybruker = { git = "https://gitlab.com/cfmm/bruker/pybruker" }
