@@ -159,14 +159,8 @@ def write_split_dicom(
       fp.write(mmap_arr[f["frame_idx"]].tobytes())
 
 
-def main():
-  parser = argparse.ArgumentParser(description="Split Bruker Enhanced DICOMs by Complex, Coil, and Double Samples.")
-  parser.add_argument("input_dir", help="Directory containing the input DICOM files")
-  parser.add_argument("output_dir", help="Directory to save the split DICOM files")
-  args = parser.parse_args()
-
-  input_dir = args.input_dir
-  out_dir = args.output_dir
+def split_bruker_dicoms(input_dir, out_dir):
+  """Splits Bruker Enhanced DICOMs by Complex, Coil, and Double Samples."""
   os.makedirs(out_dir, exist_ok=True)
 
   # Automatically find and sort only .dcm files in the input directory
@@ -246,14 +240,23 @@ def main():
 
     # Also set top-level ImageType[2] to REAL or IMAGINARY to help dcm2niix
     if "ImageType" in hdr_copy and orig_typelen >= 4:
-      img_type = list(orig_imgtypelist)  # Create a fresh copy of the list for this iteration
+      img_type = list(orig_imgtypelist)
       img_type[3] = comp_str
       hdr_copy.ImageType = img_type
 
     print(f"Writing {out_name} ({len(flist)} frames)...")
     write_split_dicom(out_path, hdr_copy, flist, pixel_memmaps, bytes_per_frame)
 
-  print("\nDone! You can now run dcm2niix on:", out_dir)
+  print(f"\nDone! You can now run dcm2niix on: {out_dir}")
+
+
+def main():
+  parser = argparse.ArgumentParser(description="Split Bruker Enhanced DICOMs by Complex, Coil, and Double Samples.")
+  parser.add_argument("input_dir", help="Directory containing the input DICOM files")
+  parser.add_argument("output_dir", help="Directory to save the split DICOM files")
+  args = parser.parse_args()
+
+  split_bruker_dicoms(args.input_dir, args.output_dir)
 
 
 if __name__ == "__main__":
