@@ -23,19 +23,38 @@ def expandArray(vec_in):
     return vec_out
 
 def extract_info(fname, out_dir):
-    # read dicom header
-    H = pydicom.read_file(fname, stop_before_pixels=True)
+    # read dicom header. It can be huge, so instead of pydicom.dcmread(fname, stop_before_pixels=True), we set a custom stopping point
+    #H = pydicom.dcmread(fname, stop_before_pixels=True)
+    stop_tag = pydicom.tag.Tag(
+        0x5200, 0x9230
+    )  # Stop right at PerFrameFunctionalGroupsSequence, which can be huge
+    with open(fname, "rb") as fp:
+        H = pydicom.filereader.read_partial(
+            fp, stop_when=lambda tag, vr, length: tag >= stop_tag
+        )
 
     # Set output filename
     fname_out = out_dir + os.sep + H.SeriesDescription
 
     #read bruker headers
-    method=jcamp.jcamp_parse(
-            H[0x0177,0x1100].value.decode('utf-8').splitlines()
-            )
-    #visu_pars=jcamp.jcamp_parse(
-    #          H[0x0177,0x1101].value.decode('utf-8').splitlines()
-    #          )
+    method=jcamp.jcamp_parse(H[0x0177,0x1100].value.decode('utf-8').splitlines())
+    #visu_pars=jcamp.jcamp_parse(H[0x0177,0x1101].value.decode('utf-8').splitlines())
+
+    # Check for coil dimension
+    hasCoilDim = False
+    if "DimensionIndexSequence" in H:
+        for i, dim in enumerate(H.DimensionIndexSequence):
+            desc = getattr(dim, "DimensionDescriptionLabel", "No Label")
+            if desc.lower() == 'coil':
+                hasCoilDim = True
+            #print(desc)
+
+    # Read transmit coil name
+    transmit_coil_name = "none"
+    if "SharedFunctionalGroupsSequence" in H:
+        if "MRTransmitCoilSequence" in H.SharedFunctionalGroupsSequence[0]:
+            transmit_coil_name = H.SharedFunctionalGroupsSequence[0].MRTransmitCoilSequence[0].get("TransmitCoilName", "none")
+    #print(transmit_coil_name)
 
     # Create output directory
     os.makedirs(out_dir, exist_ok=True)
@@ -102,6 +121,9 @@ def extract_info(fname, out_dir):
                 fp.write("\n")
 
     # TODO: export shape info, and the shapes themselves
+
+    # Return the series description and transmit info
+    return H.SeriesDescription, hasCoilDim, transmit_coil_name
 
 def main():
     parser = argparse.ArgumentParser(description="Extract *_method.json, bmat, bval, and bvec information from bruker DICOM.")
