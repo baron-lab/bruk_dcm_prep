@@ -26,18 +26,23 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     # Just use one file for .bval extraction, and to check if multiple coils are in the data file
-    SeriesDescription, hasCoilDim, transmit_coil_name = brukHead.extract_info(input_files[0],out_dir)
+    SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name = brukHead.extract_info(input_files[0],out_dir)
 
     # Create a temp folder for intermediate files
-    temp_dir = f"{input_dir}{os.sep}temp"
-    os.makedirs(temp_dir, exist_ok=True)
+    if any(hasCoilComplexDoubleDims):
+        temp_dir = f"{input_dir}{os.sep}temp"
+        os.makedirs(temp_dir, exist_ok=True)
 
-    # Split apart double sampling, coils, and complex dims into separate dicoms
-    splitDoubleDicom.split_bruker_dicoms(input_dir,temp_dir)
+        # Split apart double sampling, coils, and complex dims into separate dicoms
+        splitDoubleDicom.split_bruker_dicoms(input_dir,temp_dir)
 
-    # TODO: combine coils? Should check for both coils and complex dims
+        #if hasCoilComplexDoubleDims[0] and hasCoilComplexDoubleDims[1]:
+            #if transmit_coil_name == 'RF RES 650 1H 02': # only combine coils here for quadrature coil, which has fairly trivial combination
+                # TODO: combine coils
+            #else:
+                #print(f"Unknown coil, so skipping quadrature coil combination. coil = {transmit_coil_name}")
 
-    # TODO: remove temp directory
+        # TODO: remove temp directory
 
 
 if __name__ == "__main__":

@@ -41,12 +41,16 @@ def extract_info(fname, out_dir):
     #visu_pars=jcamp.jcamp_parse(H[0x0177,0x1101].value.decode('utf-8').splitlines())
 
     # Check for coil dimension
-    hasCoilDim = False
+    hasCoilComplexDoubleDims = [False, False, False]
     if "DimensionIndexSequence" in H:
         for i, dim in enumerate(H.DimensionIndexSequence):
             desc = getattr(dim, "DimensionDescriptionLabel", "No Label")
             if desc.lower() == 'coil':
-                hasCoilDim = True
+                hasCoilComplexDoubleDims[0] = True
+            if desc.lower() == 'complex':
+                hasCoilComplexDoubleDims[1] = True
+            if desc.lower() == 'double samples':
+                hasCoilComplexDoubleDims[2] = True
             #print(desc)
 
     # Read transmit coil name
@@ -123,7 +127,7 @@ def extract_info(fname, out_dir):
     # TODO: export shape info, and the shapes themselves
 
     # Return the series description and transmit info
-    return H.SeriesDescription, hasCoilDim, transmit_coil_name
+    return H.SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name
 
 def main():
     parser = argparse.ArgumentParser(description="Extract *_method.json, bmat, bval, and bvec information from bruker DICOM.")

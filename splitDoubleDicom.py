@@ -290,15 +290,15 @@ def split_bruker_dicoms(input_dir, out_dir):
         name_parts = ["dMRI"]
         desc_parts = [orig_desc]
 
-        if has_complex and comp_str:
-            name_parts.append(comp_str.lower())
-            desc_parts.append(comp_str[:4].lower())
         if has_coil and coil_idx is not None:
             name_parts.append(f"coil{coil_idx}")
-            desc_parts.append(f"c{coil_idx}")
+            desc_parts.append(f"coil{coil_idx}")
         if has_ds and ds_idx is not None:
             name_parts.append(f"ds{ds_idx}")
             desc_parts.append(f"ds{ds_idx}")
+        if has_complex and comp_str:
+            name_parts.append(comp_str.lower())
+            #desc_parts.append(comp_str[:4].lower()) # Dont need this, because main use for desc is dcm2niix naming, and dcm2niix appends real/imaginary anyway because of below code setting img_type
 
         if len(name_parts) == 1:
             name_parts.append("split")
