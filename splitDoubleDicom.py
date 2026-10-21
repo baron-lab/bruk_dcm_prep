@@ -287,7 +287,7 @@ def split_bruker_dicoms(input_dir, out_dir):
         flist.sort(key=lambda f: (f["cycle_idx"], f["diff_idx"], f["pkg_idx"], f["slice_idx"]))
 
         # Dynamically build filename and SeriesDescription based on which dimensions exist
-        name_parts = ["dMRI"]
+        name_parts = [f"mri_{base_header.SeriesNumber}"]
         desc_parts = [orig_desc]
 
         if has_coil and coil_idx is not None:

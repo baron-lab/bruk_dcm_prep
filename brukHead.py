@@ -40,6 +40,10 @@ def extract_info(fname, out_dir):
     method=jcamp.jcamp_parse(H[0x0177,0x1100].value.decode('utf-8').splitlines())
     #visu_pars=jcamp.jcamp_parse(H[0x0177,0x1101].value.decode('utf-8').splitlines())
 
+    # Check dimension of acquisition (i.e., 2D or 3D k-space)
+    acqDim = expandArray(method["$PVM_Matrix"]["dim"])
+    acqDim = round(acqDim[0])
+
     # Check for coil dimension
     hasCoilComplexDoubleDims = [False, False, False]
     if "DimensionIndexSequence" in H:
@@ -127,7 +131,7 @@ def extract_info(fname, out_dir):
     # TODO: export shape info, and the shapes themselves
 
     # Return the series description and transmit info
-    return H.SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name
+    return H.SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name, acqDim
 
 def main():
     parser = argparse.ArgumentParser(description="Extract *_method.json, bmat, bval, and bvec information from bruker DICOM.")

@@ -1,7 +1,12 @@
 import os
 import argparse
+import subprocess
+import nibabel as nib
+import numpy as np
+import re
 import brukHead
 import splitDoubleDicom
+import bruk_combine
 
 def main():
     parser = argparse.ArgumentParser(description="Convert bruker dcm to nii, accounting for custom baronlab sequences.")
@@ -11,7 +16,6 @@ def main():
 
     input_dir = args.input_dir
     out_dir = args.output_dir
-    os.makedirs(out_dir, exist_ok=True)
 
     # Automatically find and sort only .dcm files in the input directory
     input_files = sorted([
@@ -26,23 +30,147 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     # Just use one file for .bval extraction, and to check if multiple coils are in the data file
-    SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name = brukHead.extract_info(input_files[0],out_dir)
+    SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name, acqDim = brukHead.extract_info(input_files[0],out_dir)
 
     # Create a temp folder for intermediate files
     if any(hasCoilComplexDoubleDims):
-        temp_dir = f"{input_dir}{os.sep}temp"
-        os.makedirs(temp_dir, exist_ok=True)
+        dir_dcm2convert = f"{out_dir}{os.sep}tempDicom"
+        os.makedirs(dir_dcm2convert, exist_ok=True)
 
         # Split apart double sampling, coils, and complex dims into separate dicoms
-        splitDoubleDicom.split_bruker_dicoms(input_dir,temp_dir)
+        splitDoubleDicom.split_bruker_dicoms(input_dir,dir_dcm2convert) 
+    else:
+        # Nothing custom to do without complex data
+        print("\nConverting to NIFTI...")
+        command = ['dcm2niix', '-f', '%d', '-o', out_dir, input_dir]
+        subprocess.run(command, capture_output=True, text=True, check=True)
+        return
 
-        #if hasCoilComplexDoubleDims[0] and hasCoilComplexDoubleDims[1]:
-            #if transmit_coil_name == 'RF RES 650 1H 02': # only combine coils here for quadrature coil, which has fairly trivial combination
-                # TODO: combine coils
-            #else:
-                #print(f"Unknown coil, so skipping quadrature coil combination. coil = {transmit_coil_name}")
+    # Run dcm2niix
+    print("\nConverting to NIFTI...")
+    dir_nifti_temp = f"{out_dir}{os.sep}tempNifti"
+    os.makedirs(dir_nifti_temp, exist_ok=True)
+    command = ['dcm2niix', '-f', '%d', '-o', dir_nifti_temp, dir_dcm2convert]
+    subprocess.run(command, capture_output=True, text=True, check=True) 
 
-        # TODO: remove temp directory
+    # Check if we can combine coils
+    combineCoils = 0
+    if hasCoilComplexDoubleDims[0] and hasCoilComplexDoubleDims[1]:
+        if transmit_coil_name == 'RF RES 650 1H 02': 
+            print('Quad coil detected. Combining coils assuming DC phase difference...')
+            combineCoils = 1
+        else:
+            print('No quad coil detected. Combining coils using sense1...')
+            combineCoils = 2
+
+    # Initialize image using header from a sample nifti
+    # im dims: [x y z Ndiff Nrep Nds]. 
+    nii_files = [ # get all nifti filenames
+        f for f in os.listdir(dir_nifti_temp)
+        if os.path.isfile(os.path.join(dir_nifti_temp, f)) and f.endswith('.nii')
+    ]
+    im_t = nib.load(dir_nifti_temp + os.sep + nii_files[0])
+    new_shape = im_t.shape + (1,)*(5-im_t.ndim) + (2,)*hasCoilComplexDoubleDims[2]
+    if hasCoilComplexDoubleDims[1]:
+        new_dtype = np.complex64
+    else:
+        new_dtype = np.float32
+    im = np.zeros(new_shape,dtype=new_dtype)
+
+    # Combine receivers 
+    ds_all = [0]
+    if hasCoilComplexDoubleDims[2]:
+        ds_all = [0, 1]
+    if combineCoils > 0:
+        for dsi in ds_all:
+            im_a = bruk_combine.combine_coils(
+                load_nii_files(dir_nifti_temp,nii_files,hasCoilComplexDoubleDims,im.shape,dsi),
+                combineCoils, acqDim) 
+            if im_a.ndim < 5:
+                im_a = np.expand_dims(im_a,tuple(range(im_a.ndim,5)))
+            im[:,:,:,:,:,dsi] = im_a
+            del im_a
+
+    # Combine double sampling
+    if hasCoilComplexDoubleDims[2]:
+        print('Combining double sampling using SENSE1...')
+        im = bruk_combine.combine_coils(im, 3, acqDim)
+
+    # TODO: need to save QA figures
+    # TODO: for complex data, should center k-space for all volumes
+    # TODO: correct for scanner drift. Only if multiple repetitions?
+
+    # Remove singleton dimensions from end
+    if im.shape[4] == 1:
+        im = im[:,:,:,:,0]
+    if im.shape[3] == 1:
+        im = im[:,:,:,0]
+
+    # Save the final nifti
+    if hasCoilComplexDoubleDims[1]:
+        im_p = np.angle(im)
+        im = np.abs(im)
+    im_out_a = nib.Nifti1Image(im, affine=im_t.affine, header=im_t.header)
+    im_out_a.set_data_dtype(im.dtype)
+    im_out_a.update_header()
+    nib.save(im_out_a, out_dir + os.sep + SeriesDescription + ".nii.gz")
+    if hasCoilComplexDoubleDims[1]:
+        im_out_p = nib.Nifti1Image(im_p, affine=im_t.affine, header=im_t.header)
+        im_out_p.set_data_dtype(im.dtype)
+        im_out_p.update_header()
+        nib.save(im_out_p, out_dir + os.sep + SeriesDescription + "_phase.nii.gz")
+
+    # Remove temp directories
+    command = ['rm', '-r', dir_dcm2convert]
+    subprocess.run(command, capture_output=True, text=True, check=True)
+    command = ['rm', '-r', dir_nifti_temp]
+    subprocess.run(command, capture_output=True, text=True, check=True)
+
+    return
+
+
+def load_nii_files(nii_dir,nii_files,hasCoilComplexDoubleDims,im_shape,dsi):    
+    # Find number of coils
+    if hasCoilComplexDoubleDims[0]:
+        coil_matches = [re.search(r'coil(\d+)', f, re.IGNORECASE) for f in nii_files]
+        coil_nums = sorted(list({int(m.group(1)) for m in coil_matches if m}))
+        Ncoil = len(coil_nums)
+    else:
+        Ncoil = 1
+    
+    # Initialize data array
+    # dims: [x y z Ndiff Nrep Ncoil]
+    new_shape = im_shape[0:5] + (Ncoil,)
+    if hasCoilComplexDoubleDims[1]:
+        new_dtype = 'complex64'
+    else:
+        new_dtype = 'float32'
+    im = np.zeros(new_shape,dtype=new_dtype)
+
+    # Loop through coils
+    for i_coil in range(0,Ncoil):
+        # Find real part for this coil and ds
+        matches = nii_files
+        if hasCoilComplexDoubleDims[2]:
+            matches = [item for item in matches if f'ds{dsi+1}' in item]  # accounts for 1 based indexing in filenames
+        if hasCoilComplexDoubleDims[0]:
+            matches = [item for item in matches if f'coil{i_coil+1}' in item] # accounts for 1 based indexing in filenames
+        if hasCoilComplexDoubleDims[1]:
+            fname_r = next(item for item in matches if 'real' in item)
+            fname_i = next(item for item in matches if 'imaginary' in item)
+            nii_r = nib.load(nii_dir + os.sep + fname_r)
+            nii_i = nib.load(nii_dir + os.sep + fname_i)
+            im_a = nii_r.get_fdata(dtype=np.float32) + 1j*nii_i.get_fdata(dtype=np.float32)
+            if im_a.ndim < 5:
+                im_a = np.expand_dims(im_a,tuple(range(im_a.ndim,5)))
+            im[:,:,:,:,:,i_coil] = im_a
+            del im_a
+        else:
+            fname_r = matches[0]
+            nii_r = nib.load(nii_dir + os.sep + fname_r)
+            im[:,:,:,:,:,i_coil] = nii_r.get_fdata(dtype=np.float32)
+
+    return im    
 
 
 if __name__ == "__main__":
