@@ -6,7 +6,7 @@ import numpy as np
 import re
 import brukHead
 import splitDoubleDicom
-import bruk_combine
+import rcvr_coil_combine
 
 def main():
     parser = argparse.ArgumentParser(description="Convert bruker dcm to nii, accounting for custom baronlab sequences.")
@@ -83,7 +83,7 @@ def main():
         ds_all = [0, 1]
     if combineCoils > 0:
         for dsi in ds_all:
-            im_a = bruk_combine.combine_coils(
+            im_a = rcvr_coil_combine.combine_coils(
                 load_nii_files(dir_nifti_temp,nii_files,hasCoilComplexDoubleDims,im.shape,dsi),
                 combineCoils, acqDim) 
             if im_a.ndim < 5:
@@ -94,7 +94,7 @@ def main():
     # Combine double sampling
     if hasCoilComplexDoubleDims[2]:
         print('Combining double sampling using SENSE1...')
-        im = bruk_combine.combine_coils(im, 3, acqDim)
+        im = rcvr_coil_combine.combine_coils(im, 3, acqDim)
 
     # TODO: need to save QA figures
     # TODO: for complex data, should center k-space for all volumes
