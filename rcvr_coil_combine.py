@@ -1,8 +1,9 @@
 import numpy as np
 from scipy.ndimage import convolve
-from scipy.linalg import cholesky, solve_triangular
+from scipy.linalg import cholesky, solve_triangular, lstsq
 from scipy import fft
 from scipy.signal import windows
+from scipy.optimize import minimize_scalar
 import matplotlib.pyplot as plt
 
 def findNoiseMask(im):
@@ -24,11 +25,18 @@ def findNoiseMask(im):
     i_max = int(np.argmax(counts))
     n_max = counts[i_max]
 
-    # MATLAB's i_max < 10 (1-based) corresponds to i_max < 9 (0-based)
-    if i_max < 9 or n_max < 50:
-        raise RuntimeError(
-            f"Cannot find noise threshold (i_max={i_max}, n_max={n_max})."
-        )
+    # Check for too few or too many bins
+    ntry = 0
+    while i_max < 9: 
+        if n_max < 50 or ntry>10:
+            raise RuntimeError(
+                f"Cannot find noise threshold (i_max={i_max}, n_max={n_max})."
+            )
+        num_bins = num_bins*2
+        counts, edges = np.histogram(im_a, bins=num_bins)
+        i_max = int(np.argmax(counts))
+        n_max = counts[i_max]
+        ntry = ntry+1
 
     thresh = edges[i_max] + edges[i_max + 1]
 
@@ -228,3 +236,209 @@ def combine_coils(im,combinetype,acqDim):
     # TODO: need to return fig to be saved in calling fucntion
 
     return im
+
+def process_repetitions(im,fftDim, bval, beta_val=30, make_qa_fig=True):
+    # Combines repetitions. TODO: this should only correct drift, because I think that combining reps should only be done after denoising, because I don't trust phase removal...
+    # Performs phase drift correction. Estimates magnitude drift for QA
+    # Assumes PE on 2nd dim (i.e., dim=1)
+
+    if im.ndim < 5 or im.shape[4] < 2:
+        print("WARNING (combine_repetitions): multiple repetitions no found")
+        return im
+
+    # Bruker often has offcenter data in k-space, so we center it before doing anything else
+    if np.iscomplexobj(im):
+        for nd in range(fftDim):
+            im = fft.fft(im,axis=nd) 
+            ax_keep = nd
+            im_test = np.sum(np.abs(im),
+                axis=tuple(i for i in range(im.ndim) if i!= ax_keep))
+            shft = -np.argmax(im_test)
+            if shft != 0:
+                im = np.roll(im, shift=shft, axis=nd)
+            im = fft.ifft(im,axis=nd)
+
+    # Find noise mask, then get signal magnitudes for all to assess signal drift
+    mask, thresh = findNoiseMask(im)
+    sigVals = np.zeros(im.shape[3:5])
+    for n3 in range(im.shape[3]):
+        for n4 in range(im.shape[4]):
+            im_a = im[:,:,:,n3,n4]
+            im_a = np.abs(im_a[~mask])
+            sigVals[n3,n4] = np.mean(im_a) #np.percentile(im_a,80). Percentile would be more robust, but it is way slower than mean
+
+    # Check for smallest bval, if this is diffusion weighted
+    if len(bval) > 0:
+        bval = np.array(bval)
+        b0ind_logical = bval < bval.min() + 50 # TODO: make sure this is okay for ex vivo
+        b0ind = np.where(b0ind_logical)[0]
+        b0ref = b0ind[-1] # use the last one as reference b/c eddies more stable by end
+
+    # Plotting signal drift
+    fig = []
+    if make_qa_fig:   
+        fig, axes = plt.subplots(2, 2, figsize=(8, 8))     
+        if len(bval) > 0:
+            
+            n = np.arange(len(b0ind))
+            for n4 in range(im.shape[4]):
+                axes[0,1].plot(n+len(n)*n4,100*sigVals[b0ind,n4]/sigVals[b0ind[0],0])
+            axes[0,1].set_title(f"mean signal across b0 images\n and repetitions (colors)\n NOT CORRECTED")
+            axes[0,1].set_xlabel('b0 number')
+            axes[0,1].set_ylabel('signal (percent)')
+        n = np.arange(im.shape[3])
+        for n4 in range(im.shape[4]):
+            axes[0,0].plot(n+n4*im.shape[3],sigVals[:,n4])
+        axes[0,0].set_title(f"mean signal across dim 4\n and repetitions (colors)\n NOT CORRECTED")
+        axes[0,0].set_xlabel('index in dim 4')
+        axes[0,0].set_ylabel('signal (raw)')
+
+    # For now we only correct drift for dwi. Should probably do it for any EPI, but for now this code is mostly used for dti
+    if len(bval) == 0:
+        print("WARNING (combine_repetitions): not DWI; skipping drift image shift corrections.")
+        return im
+
+    # Check for complext data before continuing
+    if not np.iscomplexobj(im):
+        print("WARNING (combine_repetitions): no complex data. Will not assess shifts from drift.")
+        return im
+
+    # Loop through all dwi to find drift for each case
+    opt = {"xtol": 0.01}
+    # Create basic phase ramp
+    rmp = fft.ifftshift(np.arange(-im.shape[1]//2, im.shape[1]//2, 1, dtype=im.dtype)) * 3.14 / (im.shape[1]/2)
+    rmp = rmp[None, :, None]
+    im_a = im
+    # Do the looping for repetitions 
+    if im.shape[4]>1:
+        shft_all = np.zeros((im.shape[3], im.shape[4]-1))
+        for n3 in range(im.shape[3]):
+            im_f = fft.fft(im[:,:,:,n3,0:-1],axis=1) # use LAST repetition as reference, since eddies more stable then
+            for nr in range(im.shape[4]-1):
+                res = minimize_scalar(lambda x: get_cost(x, im[:,:,:,n3,-1], im_f[:,:,:,nr], rmp),
+                    bracket=(-2,0,2),options=opt)
+                #im_a[:,:,:,n3,nr] = fft.ifft(im_f[:,:,:,nr] * np.exp(1j*res.x*rmp), axis=1) # TODO: should actually fit a line or something to all shifts, because this will be noisy.
+                shft_all[n3,nr] = res.x
+
+    # Find shifts of b0 images (for DWI)  
+    if len(bval)>0:
+        shft_b0 = np.zeros((np.sum(b0ind_logical), im.shape[4]))
+        for nb0 in range(len(b0ind)):
+            for nr in range(im.shape[4]):
+                im_f = fft.fft(im[:,:,:,b0ind[nb0],nr],axis=1)
+                res = minimize_scalar(lambda x: get_cost(x, im[:,:,:,b0ref,-1], im_f, rmp),
+                    bracket=(-2,0,2),options=opt)
+                shft_b0[nb0,nr] = res.x
+
+    # Fit a polynomial to the shifts
+    shifts_corr = []
+    if len(bval) > 0:
+        # Jointly fit using b0 results and results across repetitions
+        # Start building forward matrix for Ax=b with b0 relative to each other
+          # here, x = [a, b, c, d] in the equation shift = a+b*n+c*n^2+d*n^3, where n is the index of the volume
+        max_o = min((im.shape[3]-1)//3, 2)
+        n = b0ind
+        for nr in range(1,im.shape[4]):
+            n = np.concat((n,nr*im.shape[3]+b0ind), axis=0)
+        b0ind_all = n
+        A = np.ones(n.shape)
+        for o in range(1,max_o+1):
+            A = np.column_stack((A, n**o))
+        b = np.reshape(shft_b0.T,(-1))
+        w = np.ones(b.shape) # weights for weighted least squares
+        # Get all indices for plotting, and for working in repetitions
+        n_all = np.arange(im.shape[3])
+        n_r = n_all 
+        for nr in range(1,im.shape[4]):
+            n_next = nr*im.shape[3]+np.arange(im.shape[3])
+            n_all = np.concat((n_all,n_next), axis=0)
+            n_r = np.column_stack((n_r, n_next))
+        # Work in repetitions. Here we exploit that shift between repetitions is the difference of baseline shifts
+        if im.shape[4]>1:  
+            A2 = np.zeros(n_r.shape[0]*(n_r.shape[1]-1))
+            for o in range(1,max_o+1):
+                A2 = np.column_stack((A2, np.reshape(n_r[:,0:-1]**o-n_r[:,-1:]**o, (-1))))
+            b2 = np.reshape(shft_all,(-1))
+            w2 = np.reshape(sigVals[:,0:-1], (-1))
+            w2 = w2/np.sum(w2)*np.sum(w) # net weighting here equivalent to b0 shifts weighting
+            A = np.concat((A,A2),axis=0)
+            b = np.concat((b,b2),axis=0)
+            w = np.concat((w,w2),axis=0)
+        elif b0ind[0]>0 or b0ind[-1]<im.shape[3]-2:
+            # If b0 images are too far from each end, will have to extrapolate, so stick to linear
+            A = A[:,0:2]
+        # Solve
+        x = lstsq(A*w[:,None], b*w)
+        x = x[0]
+        shifts_corr = x[0]
+        for o in range(1,A.shape[1]):
+            shifts_corr = shifts_corr + x[o]*n_all**o
+        # Plot
+        if make_qa_fig:
+            axes[1,1].plot(n_all,shifts_corr)
+            axes[1,1].scatter(b0ind_all,np.reshape(shft_b0.T,(-1)))
+            axes[1,1].set_title(f"image shifts from drift across b0s\n CORRECTED")
+            axes[1,1].set_xlabel('volume number')
+            axes[1,1].set_ylabel('voxels')
+            # Across repetitions
+            if im.shape[4] > 1:
+                n_r = np.arange(im.shape[3])
+                y2 = np.reshape(shifts_corr,(im.shape[4],-1))
+                for nr in range(im.shape[4]-1):       
+                    axes[1,0].plot(y2[nr,:]-y2[-1,:])
+                axes[1,0].plot(shft_all,ls=':')
+                axes[1,0].set_title(f"image shifts for each repetition\n relative to last repetition")
+                axes[1,0].set_xlabel('volume number')
+                axes[1,0].set_ylabel('voxels')
+            plt.tight_layout()
+        shifts_corr = np.reshape(shifts_corr, (im.shape[4],im.shape[3]))
+    elif im.shape[4]>1:
+        # Here we just fit each repetition separately, if there is enough values for fitting 
+          # Fits are weighted by mean signal amplitude squared.
+        # Otherwise just directly use each shift found
+        max_o = min((im.shape[3]-1)//3, 2)
+        if max_o > 0:
+            n = np.arange(im.shape[3])
+            A = np.ones(n.shape)
+            w = sigVals[:,-1] # Assumes reference was the last repetition
+            x = np.zeros((max_o+1,shft_all.shape[1]))
+            for o in range(1,max_o+1):
+                A = np.column_stack((A,n**o))
+            shifts_corr = np.zeros((0,im.shape[3]))
+            for nr in range(shft_all.shape[1]):
+                b = shft_all[:,nr]
+                x_a = lstsq(A*w[:,None], b*w)
+                x[:,nr] = x_a[0]
+                # Plot
+                y = x[0,nr]
+                for o in range(1,A.shape[1]):
+                    y = y + x[o,nr]*n**o
+                shifts_corr = np.concat((shifts_corr,y[None,:]),axis=0)
+                if make_qa_fig: 
+                    axes[1,0].plot(n,y)
+                    axes[1,0].plot(n,shft_all[:,nr],ls=':')
+                    axes[1,0].set_title(f"image shifts for each repetition\n relative to last repetition")
+                    axes[1,0].set_xlabel('volume number')
+                    axes[1,0].set_ylabel('voxels')
+                    plt.tight_layout()
+            shifts_corr = np.concat((shifts_corr,np.zeros((1,im.shape[3]))),axis=0)
+        else:
+            shifts_corr = np.concat((shft_all.T, np.zeros((1,im.shape[3]))), axis=0)
+
+    # Apply shifts. 
+    if shifts_corr.size > 0:
+        shifts_corr = shifts_corr.astype(im.dtype)
+        for n3 in range(im.shape[3]):
+            for n4 in range(im.shape[4]):
+                if shifts_corr[n4,n3] > 0.01:
+                    im_f = fft.fft(im[:,:,:,n3,n4],axis=1)
+                    cor = np.exp(1j*shifts_corr[n4,n3]*rmp)
+                    im[:,:,:,n3,n4] = fft.ifft(im_f * cor, axis=1)
+
+    return im, fig
+    
+    
+def get_cost(shft, im_ref, im_f_in, rmp):
+    im_t = fft.ifft(im_f_in * np.exp(1j*shft*rmp), axis=1)
+    cost = np.sum(np.abs(im_t) * np.abs(im_ref))
+    return -cost

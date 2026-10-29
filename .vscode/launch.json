@@ -1,0 +1,40 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+    
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+        },
+
+        {
+            "name": "Python Debugger: directory args",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            //"args": ["/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/dMRI_dicom/exvivotest^^^^.MR.Baron^MAM.440003.1.20261002.731B54EB.dcm"] // single dicom input, huge ex vivo file
+            //"args": ["/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/invivoForTests/30002/BLM1^^^^.MR.Baron^MAM.30002.1.20260804.AB6D22F4.dcm"] // single dicom input, in vivo file
+            //
+            //"args": ["/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/dMRI_dicom", "/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/dMRI_dicom/nifti_out"] // ex vivo complex double samp
+            "args": ["/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/invivoForTests/30002", "/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/invivoForTests/30002/nifti_out"] // in vivo complex, no double, 
+            //"args": ["/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/invivoForTests/30001", "/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/invivoForTests/30001/nifti_out"] // in vivo mag, no double, 
+        },
+        {
+            "name": "Python Debugger: dcm arg",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": ["/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/dMRI_dicom/exvivotest^^^^.MR.Baron^MAM.440003.1.20261002.731B54EB.dcm"] // single dicom input, huge ex vivo file
+            //"args": ["/nfs/baron/studyData/mouseAging/exvivo/piloting/20261002/data/invivoForTests/30002/BLM1^^^^.MR.Baron^MAM.30002.1.20260804.AB6D22F4.dcm"] // single dicom input, in vivo file
+        }
+
+    ]
+}

@@ -22,7 +22,7 @@ def expandArray(vec_in):
             vec_out = vec_out + [float(item)]
     return vec_out
 
-def extract_info(fname, out_dir):
+def extract_info(fname, out_dir, do_write=True):
     # read dicom header. It can be huge, so instead of pydicom.dcmread(fname, stop_before_pixels=True), we set a custom stopping point
     #H = pydicom.dcmread(fname, stop_before_pixels=True)
     stop_tag = pydicom.tag.Tag(
@@ -32,6 +32,11 @@ def extract_info(fname, out_dir):
         H = pydicom.filereader.read_partial(
             fp, stop_when=lambda tag, vr, length: tag >= stop_tag
         )
+
+    # Check total number of concatenated files
+    num_concat = 1
+    if hasattr(H,'InConcatenationTotalNumber'):
+        num_concat = int(H.InConcatenationTotalNumber)
 
     # Set output filename
     fname_out = out_dir + os.sep + H.SeriesDescription
@@ -43,6 +48,19 @@ def extract_info(fname, out_dir):
     # Check dimension of acquisition (i.e., 2D or 3D k-space)
     acqDim = expandArray(method["$PVM_Matrix"]["dim"])
     acqDim = round(acqDim[0])
+
+    # Get some dimensions
+    im_matrix_xyz_diff_echo_rep = expandArray(method["$PVM_Matrix"]["value"])
+    if acqDim < 3:
+        im_matrix_xyz_diff_echo_rep = im_matrix_xyz_diff_echo_rep + expandArray(method["$PVM_SPackArrNSlices"]["value"])
+    if method["$PVM_NSPacks"] > 1:
+        print("WARNING: brukHead found PVM_NSPacks>1. Downstream code may not account for this")
+    im_matrix_xyz_diff_echo_rep = im_matrix_xyz_diff_echo_rep + [1,1,1]
+    if "$PVM_DwNDiffDir" in method:
+        im_matrix_xyz_diff_echo_rep[3] = method["$PVM_DwNDiffDir"]
+    im_matrix_xyz_diff_echo_rep[4] = method["$PVM_NEchoImages"]
+    im_matrix_xyz_diff_echo_rep[5] = method["$PVM_NRepetitions"]
+    im_matrix_xyz_diff_echo_rep = [round(x) for x in im_matrix_xyz_diff_echo_rep]
 
     # Check for coil dimension
     hasCoilComplexDoubleDims = [False, False, False]
@@ -65,17 +83,19 @@ def extract_info(fname, out_dir):
     #print(transmit_coil_name)
 
     # Create output directory
-    os.makedirs(out_dir, exist_ok=True)
+    if do_write:
+        os.makedirs(out_dir, exist_ok=True)
 
-    # save method.json file
-    with open(fname_out+'_method.json', 'w') as fp:
-        json.dump(method,  fp, indent=4)
+        # save method.json file
+        with open(fname_out+'_method.json', 'w') as fp:
+            json.dump(method,  fp, indent=4)
 
     #with open(fname_out+'_visu_pars.json', 'w') as fp:
     #    json.dump(visu_pars,  fp, indent=4)
 
     # Bvalue information 
-    if "$PVM_DwEffBval" in method:
+    bval = []
+    if "$PVM_DwEffBval" in method and do_write:
         bval = expandArray(method["$PVM_DwEffBval"]["value"])
         bvec = expandArray(method["$PVM_DwDir"]["value"])
         bvec = np.reshape(bvec, (int(len(bvec)/3+0.5), 3)).T
@@ -131,7 +151,7 @@ def extract_info(fname, out_dir):
     # TODO: export shape info, and the shapes themselves
 
     # Return the series description and transmit info
-    return H.SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name, acqDim
+    return H.SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name, acqDim, im_matrix_xyz_diff_echo_rep, num_concat, bval
 
 def main():
     parser = argparse.ArgumentParser(description="Extract *_method.json, bmat, bval, and bvec information from bruker DICOM.")
