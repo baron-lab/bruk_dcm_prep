@@ -97,10 +97,17 @@ def extract_info(fname, out_dir, do_write=True):
     bval = []
     if "$PVM_DwEffBval" in method and do_write:
         bval = expandArray(method["$PVM_DwEffBval"]["value"])
+        bval = np.array(bval)
         bvec = expandArray(method["$PVM_DwDir"]["value"])
         bvec = np.reshape(bvec, (int(len(bvec)/3+0.5), 3)).T
         bmat = expandArray(method["$PVM_DwBMat"]["value"])
         bmat = np.reshape(bmat, (int(len(bmat)/9+0.5), 9)).T
+
+        if im_matrix_xyz_diff_echo_rep[5] > 1:
+            # Replicate bvalues etc for repetitions
+            bval = np.tile(bval,(im_matrix_xyz_diff_echo_rep[5]))
+            bvec = np.tile(bvec,(1,im_matrix_xyz_diff_echo_rep[5]))
+            bmat = np.tile(bmat,(1,im_matrix_xyz_diff_echo_rep[5]))
 
         with open(fname_out+'.bval', 'w') as fp:
             for item in bval:

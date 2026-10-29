@@ -233,13 +233,12 @@ def combine_coils(im,combinetype,acqDim):
         Crcvr = np.expand_dims(Crcvr,tuple(range(Crcvr.ndim,im.ndim)))
     im = np.sum(np.conj(Crcvr) * im, axis=0)
 
-    # TODO: need to return fig to be saved in calling fucntion
-
     return im
 
-def process_repetitions(im,fftDim, bval, beta_val=30, make_qa_fig=True):
-    # Combines repetitions. TODO: this should only correct drift, because I think that combining reps should only be done after denoising, because I don't trust phase removal...
-    # Performs phase drift correction. Estimates magnitude drift for QA
+def assess_drift(im,fftDim, bval, beta_val=30, make_qa_fig=True):
+    # Estimates magnitude drift for QA
+    # Centers k-space for all images
+    # Performs phase drift shifts correction. 
     # Assumes PE on 2nd dim (i.e., dim=1)
 
     if im.ndim < 5 or im.shape[4] < 2:
@@ -269,7 +268,7 @@ def process_repetitions(im,fftDim, bval, beta_val=30, make_qa_fig=True):
 
     # Check for smallest bval, if this is diffusion weighted
     if len(bval) > 0:
-        bval = np.array(bval)
+        bval = bval[0:im.shape[3]] # Extract bval from a single repetition
         b0ind_logical = bval < bval.min() + 50 # TODO: make sure this is okay for ex vivo
         b0ind = np.where(b0ind_logical)[0]
         b0ref = b0ind[-1] # use the last one as reference b/c eddies more stable by end
@@ -317,7 +316,6 @@ def process_repetitions(im,fftDim, bval, beta_val=30, make_qa_fig=True):
             for nr in range(im.shape[4]-1):
                 res = minimize_scalar(lambda x: get_cost(x, im[:,:,:,n3,-1], im_f[:,:,:,nr], rmp),
                     bracket=(-2,0,2),options=opt)
-                #im_a[:,:,:,n3,nr] = fft.ifft(im_f[:,:,:,nr] * np.exp(1j*res.x*rmp), axis=1) # TODO: should actually fit a line or something to all shifts, because this will be noisy.
                 shft_all[n3,nr] = res.x
 
     # Find shifts of b0 images (for DWI)  
@@ -435,7 +433,7 @@ def process_repetitions(im,fftDim, bval, beta_val=30, make_qa_fig=True):
                     cor = np.exp(1j*shifts_corr[n4,n3]*rmp)
                     im[:,:,:,n3,n4] = fft.ifft(im_f * cor, axis=1)
 
-    return im, fig
+    return im
     
     
 def get_cost(shft, im_ref, im_f_in, rmp):

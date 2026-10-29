@@ -45,17 +45,15 @@ def main():
         subprocess.run(command, capture_output=True, text=True, check=True)
         return
 
-    # TODO: newer versions of dcm2niix collapse slices and DWI, seeminly leaving cycles intact. 
+    # Newer versions of dcm2niix collapse slices and DWI, seeminly leaving cycles intact. 
     # To make matters worse, when complex it incorrectly indexes real/imaginary, because in my test file I'm getting twice as many volumes in the _real file compared to _imaginary
-      # So, I think I need to use splitDoubleDicom even if it is just complex, then uncollapse slices and DWI myself.
-      # It seems that splitDoubleDicom correctly separates real/imag in these cases, and the collapsing is still left.
-      # So, I just need to get the proper size from brukhead or something. At this point I'm wondering if I should have brukhead output the whole header H.
+      # So, we use splitDoubleDicom to correctly separate real and imaginary, then uncollapse slices and DWI with help from im_matrix_xyz_diff_echo_rep (uncollapsing occurs in load_nii_files).
     made_dcm_dir = False
     if any(hasCoilComplexDoubleDims) or num_concat>1:
         # Split apart double sampling, coils, and complex dims into separate dicoms
         dir_dcm2convert = f"{out_dir}{os.sep}tempDicom"
         os.makedirs(dir_dcm2convert, exist_ok=True)
-        splitDoubleDicom.split_bruker_dicoms(input_dir,dir_dcm2convert) # TODO: uncomment
+        #splitDoubleDicom.split_bruker_dicoms(input_dir,dir_dcm2convert) # TODO: uncomment
         made_dcm_dir = True
 
     # Run dcm2niix
@@ -66,7 +64,7 @@ def main():
         command = ['dcm2niix', '-f', '%d', '-d', '0', '-o', dir_nifti_temp, dir_dcm2convert]
     else:
         command = ['dcm2niix', '-f', '%d', '-d', '0', '-o', dir_nifti_temp, input_dir]
-    subprocess.run(command, capture_output=True, text=True, check=True)  # TODO: uncomment
+    #subprocess.run(command, capture_output=True, text=True, check=True)  # TODO: uncomment
 
     # Check for quad coil, which has simpler coil combination
     combineCoils = 0
@@ -127,11 +125,15 @@ def main():
     #    Assess signal drift
     #    Align k-space center locations across all volumes (if complex)
     #    Assess and correct shifts caused by drift (if complex)
-    # TODO: should keep all repetitions, and replicate the bval arrays. Do the replication in brukhead.py, which does the writing anyway
-    im = rcvr_coil_combine.process_repetitions(im,acqDim,bval)
-    # TODO: reshape im so that all reps are in dim 4. Order all be {all dwi rep 1}, {all dwi rep 2}, ...
+    im = rcvr_coil_combine.assess_drift(im,acqDim,bval)
 
-    # TODO: need to save QA figures
+    # Reshape im so that all reps are in dim 4. Order all be {all dwi rep 1}, {all dwi rep 2}, ...
+    #   Note that for DWI, saved bval files have already been replicated in brukhead methods
+    if im.shape[4] > 1:
+        im = np.swapaxes(im,3,4)
+        im = np.reshape(im, im.shape[0:3] + (-1,))
+
+    # TODO: need to save QA figures. Should probably give a path/fname to the relevant functions instead of saving here
 
     # Remove singleton dimensions from end
     if im.shape[4] == 1:
@@ -154,7 +156,10 @@ def main():
         im_out_p.update_header()
         nib.save(im_out_p, out_dir + os.sep + SeriesDescription + "_phase.nii.gz")
 
-    # TODO: need to copy over .json from dcm2niix
+    # Copy over one .json from dcm2niix
+    name_pre = os.path.splitext(dir_nifti_temp+os.sep+nii_files[0])[0] + '.json'
+    command = ['cp', name_pre, out_dir+os.sep+SeriesDescription+'.json']
+    subprocess.run(command, capture_output=True, text=True, check=True)
 
     # Remove temp directories
     command = ['rm', '-r', dir_dcm2convert]
@@ -185,7 +190,6 @@ def load_nii_files(nii_dir,nii_files,hasCoilComplexDoubleDims,im_shape,dsi):
 
     # Loop through coils
     for i_coil in range(0,Ncoil):
-        # Find real part for this coil and ds
         matches = nii_files
         if hasCoilComplexDoubleDims[2]:
             matches = [item for item in matches if f'ds{dsi+1}' in item]  # accounts for 1 based indexing in filenames
