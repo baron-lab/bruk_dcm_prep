@@ -194,12 +194,22 @@ def extract_info(fname, out_dir, do_write=True):
                 shp_a = shape_all[ns,:,:].T
                 shp_net = np.concat((-shp_a[0:3,:], np.zeros((3,Nzeros_gap[ns])), shp_a[3:6,:]),axis=1)
                 q = np.cumsum(shp_net,axis=1)
+                # Find centroids
                 Q = fft.fft(q,axis=1)
                 freq = fft.fftfreq(shp_net.shape[1], d=shape_dt[ns]/1000)
                 Q = Q[:,0:Q.shape[1]//2]
                 freq = freq[0:Q.shape[1]]
                 Q[0] = Q[0]/2  # needed for accurate 1-sided fft.
                 Q = np.abs(Q)**2 # spectral power
+                # Find rank of b-matrix
+                bm = np.zeros((3,3))
+                for n0 in range(3):
+                    for n1 in range(n0+1):
+                        bm[n0,n1] = np.sum(q[n0,:]*q[n1,:])
+                        bm[n1,n0] = bm[n0,n1]
+                eigenvals = np.abs(np.linalg.eigvals(bm))
+                eigenvals = eigenvals/eigenvals.max()
+                brank = round(sum(eigenvals),2)
                 with np.errstate(invalid='ignore'): # Don't throw nan warnings, which can happen for a gradient with all zeros
                     cents = np.sum(Q*freq[None,:],axis=1) / np.sum(Q,axis=1)
                 with open(fname_out+f".shp{ns}", 'w') as fp:
@@ -208,6 +218,7 @@ def extract_info(fname, out_dir, do_write=True):
                     fp.write("#  temporal spacing between points in ms\n")
                     fp.write("#  dead time between gradient shapes before and after 180 RF pulse, in ms\n")
                     fp.write("#  q-spectra centroids for each of gx, gy, gz, in Hz. Will be nan if g is all zeros\n")
+                    fp.write("#  rank of bmatrix\n")
                     fp.write("#  gradient amplitudes for gx of pre 180 shape\n")
                     fp.write("#  gradient amplitudes for gy of pre 180 shape\n")
                     fp.write("#  gradient amplitudes for gz of pre 180 shape\n")
@@ -215,14 +226,15 @@ def extract_info(fname, out_dir, do_write=True):
                     fp.write("#  gradient amplitudes for gx of post 180 shape\n")
                     fp.write("#  gradient amplitudes for gx of post 180 shape\n")
                     fp.write("# Note that the gradient amplitudes are normalized to max of 1; actual magnitudes can be calculated with help from .bval table and .shapeperdir file\n")
-                    fp.write(f"{shape_dt[ns]}\n")
-                    fp.write(f"{shape_gaps[ns]}\n")
+                    fp.write(f"{shape_dt[ns]} \n")
+                    fp.write(f"{shape_gaps[ns]} \n")
                     for nax in range(3):
                         if np.isnan(cents[nax]):
                             fp.write("nan ")
                         else:
                             fp.write(f"{cents[nax]} ")
                     fp.write("\n")
+                    fp.write(f"{brank} \n")
                     for row in shp_a:
                         for item in row:
                             fp.write("%s " % item)
