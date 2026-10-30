@@ -4,6 +4,7 @@ import json
 import pydicom
 from pybruker import jcamp
 import numpy as np
+from scipy import fft
 
 # Define function for expanding arrays with repeated values in methods json
 def expandArray(vec_in):
@@ -164,7 +165,68 @@ def extract_info(fname, out_dir, do_write=True):
                     fp.write("%s " % item)
                 fp.write("\n")
 
-    # TODO: export shape info, and the shapes themselves
+        # Export shape info, and the shapes themselves
+        if "$DwShapesOn" in method and method["$DwNShapes"]>0:
+            # Shapes per direction
+            shape_per_dir= np.array(expandArray(method["$DwShapePerDir"]["value"]),dtype=int) - 1
+            if im_matrix_xyz_diff_echo_rep[5] > 1:
+                shape_per_dir = np.tile(shape_per_dir,(im_matrix_xyz_diff_echo_rep[5]))
+            with open(fname_out+'.shapeperdir', 'w') as fp:
+                for item in shape_per_dir:
+                    fp.write("%s " % item)
+                fp.write("\n")
+
+            # The actual shapes
+            shape_dt = ( np.array(expandArray(method["$DwShapeDurs"]["value"])) /
+                np.array(expandArray(method["$DwShapePoints"]["value"])) )
+            shape_gaps = ( np.array(expandArray(method["$DwShapeSeps"]["value"])) -
+                np.array(expandArray(method["$DwShapeDurs"]["value"])) )
+            Nzeros_gap = np.round(shape_gaps // shape_dt).astype(int)
+            # for $DwGradShapeArray:
+                # axis 0 is shape number
+                # axis 1 is the diffusion gradient shape
+                # asis 2 is 6 elements. First three are gx,gy,gz for before 180 pulse, while next three are gx,gy,gz for after
+            shape_all = np.reshape( np.array(expandArray(method["$DwGradShapeArray"]["value"])),
+                np.array(expandArray(method["$DwGradShapeArray"]["dim"]),dtype=int) )
+            for ns in range(method["$DwNShapes"]):
+                # write files, including a header
+                # also build a unified shape that we can calculate q-spectra and centroids from
+                shp_a = shape_all[ns,:,:].T
+                shp_net = np.concat((-shp_a[0:3,:], np.zeros((3,Nzeros_gap[ns])), shp_a[3:6,:]),axis=1)
+                q = np.cumsum(shp_net,axis=1)
+                Q = fft.fft(q,axis=1)
+                freq = fft.fftfreq(shp_net.shape[1], d=shape_dt[ns]/1000)
+                Q = Q[:,0:Q.shape[1]//2]
+                freq = freq[0:Q.shape[1]]
+                Q[0] = Q[0]/2  # needed for accurate 1-sided fft.
+                Q = np.abs(Q)**2 # spectral power
+                with np.errstate(invalid='ignore'): # Don't throw nan warnings, which can happen for a gradient with all zeros
+                    cents = np.sum(Q*freq[None,:],axis=1) / np.sum(Q,axis=1)
+                with open(fname_out+f".shp{ns}", 'w') as fp:
+                    fp.write(f"# DWI Gradient Shape {ns}\n")
+                    fp.write("# the rows after this header correspond to:\n")
+                    fp.write("#  temporal spacing between points in ms\n")
+                    fp.write("#  dead time between gradient shapes before and after 180 RF pulse, in ms\n")
+                    fp.write("#  q-spectra centroids for each of gx, gy, gz, in Hz. Will be nan if g is all zeros\n")
+                    fp.write("#  gradient amplitudes for gx of pre 180 shape\n")
+                    fp.write("#  gradient amplitudes for gy of pre 180 shape\n")
+                    fp.write("#  gradient amplitudes for gz of pre 180 shape\n")
+                    fp.write("#  gradient amplitudes for gx of post 180 shape\n")
+                    fp.write("#  gradient amplitudes for gx of post 180 shape\n")
+                    fp.write("#  gradient amplitudes for gx of post 180 shape\n")
+                    fp.write("# Note that the gradient amplitudes are normalized to max of 1; actual magnitudes can be calculated with help from .bval table and .shapeperdir file\n")
+                    fp.write(f"{shape_dt[ns]}\n")
+                    fp.write(f"{shape_gaps[ns]}\n")
+                    for nax in range(3):
+                        if np.isnan(cents[nax]):
+                            fp.write("nan ")
+                        else:
+                            fp.write(f"{cents[nax]} ")
+                    fp.write("\n")
+                    for row in shp_a:
+                        for item in row:
+                            fp.write("%s " % item)
+                        fp.write("\n")
 
     # Return the series description and transmit info
     return H.SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name, acqDim, pe_axis, im_matrix_xyz_diff_echo_rep, num_concat, bval

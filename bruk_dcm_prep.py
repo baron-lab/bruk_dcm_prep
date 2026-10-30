@@ -54,7 +54,7 @@ def main():
         # Split apart double sampling, coils, and complex dims into separate dicoms
         dir_dcm2convert = f"{out_dir}{os.sep}tempDicom"
         os.makedirs(dir_dcm2convert, exist_ok=True)
-        #splitDoubleDicom.split_bruker_dicoms(input_dir,dir_dcm2convert) # TODO: uncomment
+        splitDoubleDicom.split_bruker_dicoms(input_dir,dir_dcm2convert) 
         made_dcm_dir = True
 
     # Run dcm2niix. We don't compress since they are just intermediate files
@@ -65,7 +65,7 @@ def main():
         command = ['dcm2niix', '-f', '%d', '-d', '0', '-o', dir_nifti_temp, dir_dcm2convert]
     else:
         command = ['dcm2niix', '-f', '%d', '-d', '0', '-o', dir_nifti_temp, input_dir]
-    #subprocess.run(command, capture_output=True, text=True, check=True)  # TODO: uncomment
+    subprocess.run(command, capture_output=True, text=True, check=True)  
 
     # Check for quad coil, which has simpler coil combination
     combineCoils = 0
@@ -169,9 +169,9 @@ def main():
 
     # Remove temp directories
     command = ['rm', '-r', dir_dcm2convert]
-    #subprocess.run(command, capture_output=True, text=True, check=True)  # TODO: remove comment
+    subprocess.run(command, capture_output=True, text=True, check=True)  
     command = ['rm', '-r', dir_nifti_temp]
-    #subprocess.run(command, capture_output=True, text=True, check=True)   # TODO: remove comment
+    subprocess.run(command, capture_output=True, text=True, check=True)   
 
     return
 
