@@ -1,14 +1,18 @@
 # Overview
 Python code to convert enhanced dicoms from bruker to nifti.
 It can handle very large dicoms that are split across multiple files due to file size limits.
+
 Also exports diffusion gradient shape files for baron lab custom dMRI sequence, dtiEpiFreeShapes
   - the shape files also list frequency centroids of q-spectra and b-matrix rank
+
 For complex data, additional processing is performed:
   - coil combination if multiple coils exist in the data
   - combination of double sampling double samples have been saved separately. This is a custom recon that can be used for dtiEpiFreeShapes
   - centering of k=0 in k-space (may be helpful for subsequent complex denoising algorithms). Pretty benign change to images.
   - characterization of signal magnitude drift if multiple repetitions exist, or across b0's for dwi
   - characterization and correction of signal phase drift for EPI (manifesting as image shifts along PE) if multiple repetitions exist, or across b0's for dwi
+
+Some of the preprocessing files will automatically save images starting with `qa_`, which are to quickly assess if things went as expected
 
 # Setup
 - Install required libraries via pixi.toml that is included in this repository. 
