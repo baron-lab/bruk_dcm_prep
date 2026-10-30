@@ -49,6 +49,15 @@ def extract_info(fname, out_dir, do_write=True):
     acqDim = expandArray(method["$PVM_Matrix"]["dim"])
     acqDim = round(acqDim[0])
 
+    # Find phase encode axis
+    pe_enc_dicom = H.SharedFunctionalGroupsSequence[0].MRFOVGeometrySequence[0].InPlanePhaseEncodingDirection
+    if pe_enc_dicom.lower() == 'row':
+        pe_axis = 0
+    elif pe_enc_dicom.lower() == 'col' or pe_enc_dicom.lower() == 'column': 
+        pe_axis = 1
+    else:
+        pe_axis = -1
+
     # Get some dimensions
     im_matrix_xyz_diff_echo_rep = expandArray(method["$PVM_Matrix"]["value"])
     if acqDim < 3:
@@ -158,7 +167,7 @@ def extract_info(fname, out_dir, do_write=True):
     # TODO: export shape info, and the shapes themselves
 
     # Return the series description and transmit info
-    return H.SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name, acqDim, im_matrix_xyz_diff_echo_rep, num_concat, bval
+    return H.SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name, acqDim, pe_axis, im_matrix_xyz_diff_echo_rep, num_concat, bval
 
 def main():
     parser = argparse.ArgumentParser(description="Extract *_method.json, bmat, bval, and bvec information from bruker DICOM.")

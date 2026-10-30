@@ -48,33 +48,11 @@ def findNoiseMask(im):
 
     return mask, thresh
 
-def est_quad_coil_params(im, mask, make_qa_fig=True):
+def est_quad_coil_params(im, mask, qa_fig_name=""):
     """
-    TODO: rewrite this description
-    Estimates the pre-whitening matrix L and quadrature phase offset p_off
-    from a two-channel complex image volume.
-
-    Parameters
-    ----------
-    im_vol : np.ndarray (complex64 or complex128)
-        Complex image array of shape (x, y, ..., 2), where the last axis
-        represents the 2 quadrature coil channels. Usually a single 2D slice
-        or 3D volume (x, y, slice, 2).
-    make_qa_fig : bool, default=True
-        If True, creates and returns a matplotlib Figure for QA inspection.
-
-    Returns
-    -------
-    L : np.ndarray, shape (2, 2)
-        Lower-triangular Cholesky pre-whitening matrix (normalized to L[0, 0]).
-    p_off : float
-        Estimated phase offset in radians between Channel 1 and Channel 2.
-    w : np.ndarray, shape (2,)
-        Fused complex weight vector `w = [1, exp(1j * p_off)] @ inv(L)` so the
-        caller can combine pre-whitening and phase combination in a single step:
-        `im_combined = w[0] * ch1 + w[1] * ch2`.
-    fig : matplotlib.figure.Figure or None
-        QA figure handle (or None if make_qa_fig is False).
+    Estimates quadrature phase offset p_off from a two-channel complex image volume, 
+    and casts as two receiver sensitivities with a single complex value for each channel.
+    Receivers wouuld then be combined in a way that is analogous to SENSE1
     """
     # First dim of im should be receivers, followed by normal spatial dims then any extra dims after that
     if im.shape[0] != 2:
@@ -121,7 +99,7 @@ def est_quad_coil_params(im, mask, make_qa_fig=True):
     slc_idx_p = (slice(None), slice(None), mid_z) 
 
     fig = None
-    if make_qa_fig:
+    if qa_fig_name:
         fig, axes = plt.subplots(1, 3, figsize=(12, 3.5))
         axes[0].imshow(np.abs(im[slc_idx_im]), cmap="gray", aspect="auto")
         axes[0].set_title("image")
@@ -133,11 +111,12 @@ def est_quad_coil_params(im, mask, make_qa_fig=True):
         plt.colorbar(im_plot, ax=axes[2])
         axes[2].set_title("channel phase diff (masked).\nShould not spatially vary")
         plt.tight_layout()
+        plt.savefig(qa_fig_name, dpi=300, bbox_inches='tight')
 
     return Crcvr, fig
 
 
-def est_receiver_sens(im, mask, fftDim, beta_val=30, make_qa_fig=True):
+def est_receiver_sens(im, mask, fftDim, qa_fig_name="", beta_val=30):
     # Finds receiver sensitivities 
     # First dim of im should be receivers, followed by normal spatial dims then any extra dims after that
     # Complex sum over all dimensions beyond 3 to improve SNR and thus make separation of noise and signal easier
@@ -156,7 +135,6 @@ def est_receiver_sens(im, mask, fftDim, beta_val=30, make_qa_fig=True):
         shft = -np.argmax(im_test)
         if shft != 0:
             im_a = np.roll(im_a, shift=shft, axis=nd+1)
-        #im_a = fft.ifft(im_a,axis=nd+1)
 
     # Create low pass filter using Kaiser window
     win = np.multiply.outer(np.outer(
@@ -177,7 +155,7 @@ def est_receiver_sens(im, mask, fftDim, beta_val=30, make_qa_fig=True):
     # Plotting for QA
     mid_z = im_a.shape[3] // 2 
     fig = None
-    if make_qa_fig:
+    if qa_fig_name:
         fig, axes = plt.subplots(2, im_a.shape[0], figsize=(8, 8))
         for nr in range(im_a.shape[0]):
             axes[0,nr].imshow(np.abs(im_a[nr,:,:,mid_z]), cmap="gray", aspect="auto")
@@ -186,11 +164,12 @@ def est_receiver_sens(im, mask, fftDim, beta_val=30, make_qa_fig=True):
             axes[1,nr].imshow(np.abs(Crcvr[nr,:,:,mid_z]), cmap="gray", aspect="auto")
             axes[1,nr].set_title(f"Receiver Sensitivity, r{nr}")
         plt.tight_layout()
+        plt.savefig(qa_fig_name, dpi=300, bbox_inches='tight')
 
     return Crcvr, fig
 
 
-def combine_coils(im,combinetype,acqDim):
+def combine_coils(im,combinetype,acqDim,qa_fig_name=""):
     # Combines coils. 
     # Assumes quad coil if combinetype==1. Otherwise, SENSE1 is used.
     #   If combinetype > 2, no prewhitening is performed
@@ -224,9 +203,9 @@ def combine_coils(im,combinetype,acqDim):
 
     # Find receiver sensitivities
     if combinetype==1:
-        Crcvr, fig = est_quad_coil_params(im,~mask)
+        Crcvr, fig = est_quad_coil_params(im,~mask,qa_fig_name)
     else:
-        Crcvr, fig = est_receiver_sens(im,~mask,acqDim)
+        Crcvr, fig = est_receiver_sens(im,~mask,acqDim,qa_fig_name)
 
     # Apply sensitivites to combine receivers
     if Crcvr.ndim < im.ndim:
@@ -235,17 +214,18 @@ def combine_coils(im,combinetype,acqDim):
 
     return im
 
-def assess_drift(im,fftDim, bval, beta_val=30, make_qa_fig=True):
+def assess_drift(im,fftDim, pe_axis, bval, qa_fig_name=""):
     # Estimates magnitude drift for QA
     # Centers k-space for all images
     # Performs phase drift shifts correction. 
     # Assumes PE on 2nd dim (i.e., dim=1)
 
-    if im.ndim < 5 or im.shape[4] < 2:
-        print("WARNING (combine_repetitions): multiple repetitions no found")
-        return im
+    if im.ndim < 5:
+        print("ERROR (combine_repetitions): repetition dimension not found")
+        raise ValueError(f"Repetition dimension not found (axis 4). im.shape: {im.shape}")
 
     # Bruker often has offcenter data in k-space, so we center it before doing anything else
+    print("Centering k-space and measuring signal drift")
     if np.iscomplexobj(im):
         for nd in range(fftDim):
             im = fft.fft(im,axis=nd) 
@@ -269,16 +249,15 @@ def assess_drift(im,fftDim, bval, beta_val=30, make_qa_fig=True):
     # Check for smallest bval, if this is diffusion weighted
     if len(bval) > 0:
         bval = bval[0:im.shape[3]] # Extract bval from a single repetition
-        b0ind_logical = bval < bval.min() + 50 # TODO: make sure this is okay for ex vivo
+        b0ind_logical = bval < bval.min() + 50 
         b0ind = np.where(b0ind_logical)[0]
         b0ref = b0ind[-1] # use the last one as reference b/c eddies more stable by end
 
     # Plotting signal drift
     fig = []
-    if make_qa_fig:   
+    if qa_fig_name:   
         fig, axes = plt.subplots(2, 2, figsize=(8, 8))     
         if len(bval) > 0:
-            
             n = np.arange(len(b0ind))
             for n4 in range(im.shape[4]):
                 axes[0,1].plot(n+len(n)*n4,100*sigVals[b0ind,n4]/sigVals[b0ind[0],0])
@@ -301,30 +280,39 @@ def assess_drift(im,fftDim, bval, beta_val=30, make_qa_fig=True):
     if not np.iscomplexobj(im):
         print("WARNING (combine_repetitions): no complex data. Will not assess shifts from drift.")
         return im
+    
+    if pe_axis < 0:
+        print("WARNING (combine_repetitions): unknown PE axis. Will not assess shifts from drift.")
+        return im
 
     # Loop through all dwi to find drift for each case
     opt = {"xtol": 0.01}
     # Create basic phase ramp
-    rmp = fft.ifftshift(np.arange(-im.shape[1]//2, im.shape[1]//2, 1, dtype=im.dtype)) * 3.14 / (im.shape[1]/2)
-    rmp = rmp[None, :, None]
+    rmp = fft.ifftshift(np.arange(-im.shape[pe_axis]//2, im.shape[pe_axis]//2, 1, dtype=im.dtype)) * 3.14 / (im.shape[pe_axis]/2)
+    if pe_axis == 0:
+        rmp = rmp[:, None, None]
+    else:
+        rmp = rmp[None, :, None]
     im_a = im
     # Do the looping for repetitions 
     if im.shape[4]>1:
+        print("Finding image shifts from drift across repetitions...")
         shft_all = np.zeros((im.shape[3], im.shape[4]-1))
         for n3 in range(im.shape[3]):
-            im_f = fft.fft(im[:,:,:,n3,0:-1],axis=1) # use LAST repetition as reference, since eddies more stable then
+            im_f = fft.fft(im[:,:,:,n3,0:-1],axis=pe_axis) # use LAST repetition as reference, since eddies more stable then
             for nr in range(im.shape[4]-1):
-                res = minimize_scalar(lambda x: get_cost(x, im[:,:,:,n3,-1], im_f[:,:,:,nr], rmp),
+                res = minimize_scalar(lambda x: get_cost(x, im[:,:,:,n3,-1], im_f[:,:,:,nr], rmp, pe_axis),
                     bracket=(-2,0,2),options=opt)
                 shft_all[n3,nr] = res.x
 
     # Find shifts of b0 images (for DWI)  
     if len(bval)>0:
+        print("Finding image shifts from drift across b0 images...")
         shft_b0 = np.zeros((np.sum(b0ind_logical), im.shape[4]))
         for nb0 in range(len(b0ind)):
             for nr in range(im.shape[4]):
-                im_f = fft.fft(im[:,:,:,b0ind[nb0],nr],axis=1)
-                res = minimize_scalar(lambda x: get_cost(x, im[:,:,:,b0ref,-1], im_f, rmp),
+                im_f = fft.fft(im[:,:,:,b0ind[nb0],nr],axis=pe_axis)
+                res = minimize_scalar(lambda x: get_cost(x, im[:,:,:,b0ref,-1], im_f, rmp, pe_axis),
                     bracket=(-2,0,2),options=opt)
                 shft_b0[nb0,nr] = res.x
 
@@ -372,7 +360,7 @@ def assess_drift(im,fftDim, bval, beta_val=30, make_qa_fig=True):
         for o in range(1,A.shape[1]):
             shifts_corr = shifts_corr + x[o]*n_all**o
         # Plot
-        if make_qa_fig:
+        if qa_fig_name:
             axes[1,1].plot(n_all,shifts_corr)
             axes[1,1].scatter(b0ind_all,np.reshape(shft_b0.T,(-1)))
             axes[1,1].set_title(f"image shifts from drift across b0s\n CORRECTED")
@@ -412,7 +400,7 @@ def assess_drift(im,fftDim, bval, beta_val=30, make_qa_fig=True):
                 for o in range(1,A.shape[1]):
                     y = y + x[o,nr]*n**o
                 shifts_corr = np.concat((shifts_corr,y[None,:]),axis=0)
-                if make_qa_fig: 
+                if qa_fig_name: 
                     axes[1,0].plot(n,y)
                     axes[1,0].plot(n,shft_all[:,nr],ls=':')
                     axes[1,0].set_title(f"image shifts for each repetition\n relative to last repetition")
@@ -429,14 +417,18 @@ def assess_drift(im,fftDim, bval, beta_val=30, make_qa_fig=True):
         for n3 in range(im.shape[3]):
             for n4 in range(im.shape[4]):
                 if shifts_corr[n4,n3] > 0.01:
-                    im_f = fft.fft(im[:,:,:,n3,n4],axis=1)
+                    im_f = fft.fft(im[:,:,:,n3,n4],axis=pe_axis)
                     cor = np.exp(1j*shifts_corr[n4,n3]*rmp)
-                    im[:,:,:,n3,n4] = fft.ifft(im_f * cor, axis=1)
+                    im[:,:,:,n3,n4] = fft.ifft(im_f * cor, axis=pe_axis)
+
+    # Save figure
+    if qa_fig_name:
+        plt.savefig(qa_fig_name, dpi=300, bbox_inches='tight')
 
     return im
     
     
-def get_cost(shft, im_ref, im_f_in, rmp):
-    im_t = fft.ifft(im_f_in * np.exp(1j*shft*rmp), axis=1)
+def get_cost(shft, im_ref, im_f_in, rmp, pe_axis):
+    im_t = fft.ifft(im_f_in * np.exp(1j*shft*rmp), axis=pe_axis)
     cost = np.sum(np.abs(im_t) * np.abs(im_ref))
     return -cost

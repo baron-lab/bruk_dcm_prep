@@ -31,23 +31,24 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     # Just use one file for .bval extraction, and to check if multiple coils are in the data file
-    SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name, acqDim, im_matrix_xyz_diff_echo_rep, num_concat, bval = brukHead.extract_info(input_files[0],out_dir)
+    SeriesDescription, hasCoilComplexDoubleDims, transmit_coil_name, acqDim, pe_axis, im_matrix_xyz_diff_echo_rep, num_concat, bval = brukHead.extract_info(input_files[0],out_dir)
     if num_concat != len(input_files):
         print(f"Error: number of files does not match file concatenation identified in header of file {input_files[0]}", file=sys.stderr)
         sys.exit(1)
 
-    # Create intermediate dicoms. Needed for double sampling. 
-    # It may be needed for files that are split across two dicoms, but that has not been encountered yet in the absence of double sampling, so we split to be safe there
+    # Just go straight to nifti creation if magnitude data
     if not (any(hasCoilComplexDoubleDims) or num_concat>1):
         # Nothing custom to do without complex data
         print("\nConverting to NIFTI...")
-        command = ['dcm2niix', '-f', '%d', '-o', out_dir, input_dir]
+        command = ['dcm2niix', '-z', 'y', '-f', '%d', '-o', out_dir, input_dir]
         subprocess.run(command, capture_output=True, text=True, check=True)
         return
 
-    # Newer versions of dcm2niix collapse slices and DWI, seeminly leaving cycles intact. 
-    # To make matters worse, when complex it incorrectly indexes real/imaginary, because in my test file I'm getting twice as many volumes in the _real file compared to _imaginary
-      # So, we use splitDoubleDicom to correctly separate real and imaginary, then uncollapse slices and DWI with help from im_matrix_xyz_diff_echo_rep (uncollapsing occurs in load_nii_files).
+    # Create intermediate dicoms. Needed for double sampling. 
+    # It may be needed for files that are split across two dicoms, but that has not been encountered yet in the absence of double sampling, so we split to be safe there
+        # Newer versions of dcm2niix collapse slices and DWI, seeminly leaving cycles intact. 
+        # To make matters worse, when complex it incorrectly indexes real/imaginary, because in my test file I'm getting twice as many volumes in the _real file compared to _imaginary
+            # So, we use splitDoubleDicom to correctly separate real and imaginary, then uncollapse slices and DWI with help from im_matrix_xyz_diff_echo_rep (uncollapsing occurs in load_nii_files).
     made_dcm_dir = False
     if any(hasCoilComplexDoubleDims) or num_concat>1:
         # Split apart double sampling, coils, and complex dims into separate dicoms
@@ -56,7 +57,7 @@ def main():
         #splitDoubleDicom.split_bruker_dicoms(input_dir,dir_dcm2convert) # TODO: uncomment
         made_dcm_dir = True
 
-    # Run dcm2niix
+    # Run dcm2niix. We don't compress since they are just intermediate files
     print("\nConverting to NIFTI...")
     dir_nifti_temp = f"{out_dir}{os.sep}tempNifti"
     os.makedirs(dir_nifti_temp, exist_ok=True)
@@ -88,7 +89,8 @@ def main():
         print("ERROR: image matrix shape mismatch")
         sys.exit(1)
     num_dim3 = np.round(num_dim3).astype('int')
-    new_shape = im_matrix_xyz_diff_echo_rep[0:3] + [num_dim3,] + [im_matrix_xyz_diff_echo_rep[5],] + [1+hasCoilComplexDoubleDims[2],]
+    # Note that we need to use im_t.shape[0:2] for x and y, because sometimes they are swapped in the nifti releative to im_matrix_xyz_diff_echo_rep which is in RPS coordinates
+    new_shape = im_t.shape[0:2] + (im_matrix_xyz_diff_echo_rep[2],) + (num_dim3,) + (im_matrix_xyz_diff_echo_rep[5],) + (1+hasCoilComplexDoubleDims[2],)
     if hasCoilComplexDoubleDims[1]:
         new_dtype = np.complex64
     else:
@@ -102,8 +104,12 @@ def main():
     for dsi in ds_all:
         im_a = load_nii_files(dir_nifti_temp,nii_files,hasCoilComplexDoubleDims,im.shape,dsi)
         if combineCoils > 0:
+            if len(ds_all) > 1:
+                qa_fname = out_dir + os.sep + f"qa_combCoils_ds{dsi}.png"
+            else:
+                qa_fname = out_dir + os.sep + "qa_combCoils.png"
             im_a = rcvr_coil_combine.combine_coils(
-                im_a, combineCoils, acqDim) 
+                im_a, combineCoils, acqDim, qa_fname) 
         elif im_a.ndim > 5 and im_a.shape[5] == 1:
             im_a = im_a[:,:,:,:,:,0]
         else:
@@ -117,7 +123,8 @@ def main():
     # Combine double sampling
     if hasCoilComplexDoubleDims[2]:
         print('Combining double sampling using SENSE1...')
-        im = rcvr_coil_combine.combine_coils(im, 3, acqDim)
+        qa_fname = out_dir + os.sep + "qa_comb_doublesamp.png"
+        im = rcvr_coil_combine.combine_coils(im, 3, acqDim, qa_fname)
     else:
         im = im[:,:,:,:,:,0]
     
@@ -125,15 +132,14 @@ def main():
     #    Assess signal drift
     #    Align k-space center locations across all volumes (if complex)
     #    Assess and correct shifts caused by drift (if complex)
-    im = rcvr_coil_combine.assess_drift(im,acqDim,bval)
+    qa_fname = out_dir + os.sep + "qa_drift.png"
+    im = rcvr_coil_combine.assess_drift(im,acqDim,pe_axis,bval,qa_fname)
 
     # Reshape im so that all reps are in dim 4. Order all be {all dwi rep 1}, {all dwi rep 2}, ...
     #   Note that for DWI, saved bval files have already been replicated in brukhead methods
     if im.shape[4] > 1:
         im = np.swapaxes(im,3,4)
-        im = np.reshape(im, im.shape[0:3] + (-1,))
-
-    # TODO: need to save QA figures. Should probably give a path/fname to the relevant functions instead of saving here
+        im = np.reshape(im, im.shape[0:3] + (-1,) + (1,))
 
     # Remove singleton dimensions from end
     if im.shape[4] == 1:
@@ -163,9 +169,9 @@ def main():
 
     # Remove temp directories
     command = ['rm', '-r', dir_dcm2convert]
-    subprocess.run(command, capture_output=True, text=True, check=True)
+    #subprocess.run(command, capture_output=True, text=True, check=True)  # TODO: remove comment
     command = ['rm', '-r', dir_nifti_temp]
-    subprocess.run(command, capture_output=True, text=True, check=True)
+    #subprocess.run(command, capture_output=True, text=True, check=True)   # TODO: remove comment
 
     return
 
