@@ -186,7 +186,19 @@ def combine_coils(im,combinetype,acqDim,qa_fig_name=""):
     # --- 1. Find noise covariance between channels and pre-whiten ---
     if combinetype < 3:
         # Extract noise
-        nse = im[:, mask] 
+        # For very large data sets, using ALL noise is very computationally intensive for little gain. 
+        print("  prewhitening...")
+        if im.ndim > 5:
+            # Only use last repetition
+            nse = im[:,:,:,:,:,-1]
+        else:
+            nse = im
+        max_N_dim4 = 500
+        if nse.ndim > 4 and nse.shape[4] > max_N_dim4:
+            # Only trim dwi if data set is huge, since different dwi may have different characteristics, and thus we ideally want all
+            nskip = np.ceil(im.shape[4] / max_N_dim4).astype(int)
+            nse = nse[:,:,:,:,::nskip]
+        nse = nse[:, mask] 
         nse = nse.reshape(nse.shape[0],-1)
 
         psi = (nse @ nse.conj().T) / (nse.shape[1] - 1)
@@ -197,20 +209,37 @@ def combine_coils(im,combinetype,acqDim,qa_fig_name=""):
         del nse
 
         # Apply pre-whitening: L \ im(:,:)
-        im_shape = im.shape
-        im = solve_triangular(L, im.reshape(im.shape[0], -1), lower=True)
-        im = np.reshape(im,im_shape)
+        # Perform separately over all repetitions, because data sets can get huge, making this expensive in terms of memory
+        if im.ndim > 5 and im.shape[5] > 1:
+            for nr in range(im.shape[5]):
+                shp_in = im[:,:,:,:,:,nr].shape
+                tmp = im[:,:,:,:,:,nr].reshape(im.shape[0],-1)
+                im[:,:,:,:,:,nr] = solve_triangular(L, tmp, lower=True).reshape(shp_in)
+        else:
+            im_shape = im.shape
+            im = solve_triangular(L, im.reshape(im.shape[0], -1), lower=True)
+            im = np.reshape(im,im_shape)
 
     # Find receiver sensitivities
+    print("  finding sensitivity maps...")
     if combinetype==1:
         Crcvr, fig = est_quad_coil_params(im,~mask,qa_fig_name)
     else:
         Crcvr, fig = est_receiver_sens(im,~mask,acqDim,qa_fig_name)
 
     # Apply sensitivites to combine receivers
-    if Crcvr.ndim < im.ndim:
-        Crcvr = np.expand_dims(Crcvr,tuple(range(Crcvr.ndim,im.ndim)))
-    im = np.sum(np.conj(Crcvr) * im, axis=0)
+    print("  combining receivers...")
+    if im.ndim>5 and im.shape[5]>1:
+        # Here we do this in a slightly more memory efficient way. 
+        if Crcvr.ndim < im.ndim-1:
+            Crcvr = np.expand_dims(Crcvr,tuple(range(Crcvr.ndim,im.ndim-1)))
+        for nrep in range(im.shape[5]):
+            im[0,:,:,:,:,nrep] = np.sum(np.conj(Crcvr) * im[:,:,:,:,:,nrep], axis=0)
+        im = im[0,:,:,:,:,:]
+    else:
+        if Crcvr.ndim < im.ndim:
+            Crcvr = np.expand_dims(Crcvr,tuple(range(Crcvr.ndim,im.ndim)))
+        im = np.sum(np.conj(Crcvr) * im, axis=0)
 
     return im
 
@@ -302,7 +331,7 @@ def assess_drift(im,fftDim, pe_axis, bval, qa_fig_name=""):
             im_f = fft.fft(im[:,:,:,n3,0:-1],axis=pe_axis) # use LAST repetition as reference, since eddies more stable then
             for nr in range(im.shape[4]-1):
                 res = minimize_scalar(lambda x: get_cost(x, im[:,:,:,n3,-1], im_f[:,:,:,nr], rmp, pe_axis),
-                    bracket=(-2,0,2),options=opt)
+                    bracket=(-1,0),options=opt)
                 shft_all[n3,nr] = res.x
 
     # Find shifts of b0 images (for DWI)  
@@ -313,7 +342,7 @@ def assess_drift(im,fftDim, pe_axis, bval, qa_fig_name=""):
             for nr in range(im.shape[4]):
                 im_f = fft.fft(im[:,:,:,b0ind[nb0],nr],axis=pe_axis)
                 res = minimize_scalar(lambda x: get_cost(x, im[:,:,:,b0ref,-1], im_f, rmp, pe_axis),
-                    bracket=(-2,0,2),options=opt)
+                    bracket=(-1,0),options=opt)
                 shft_b0[nb0,nr] = res.x
 
     # Fit a polynomial to the shifts
@@ -416,7 +445,7 @@ def assess_drift(im,fftDim, pe_axis, bval, qa_fig_name=""):
         shifts_corr = shifts_corr.astype(im.dtype)
         for n3 in range(im.shape[3]):
             for n4 in range(im.shape[4]):
-                if shifts_corr[n4,n3] > 0.01:
+                if np.abs(shifts_corr[n4,n3]) > 0.01:
                     im_f = fft.fft(im[:,:,:,n3,n4],axis=pe_axis)
                     cor = np.exp(1j*shifts_corr[n4,n3]*rmp)
                     im[:,:,:,n3,n4] = fft.ifft(im_f * cor, axis=pe_axis)
