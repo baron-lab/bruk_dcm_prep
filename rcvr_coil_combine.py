@@ -250,7 +250,7 @@ def assess_drift(im,fftDim, pe_axis, bval, qa_fig_name=""):
     # Assumes PE on 2nd dim (i.e., dim=1)
 
     if im.ndim < 5:
-        print("ERROR (combine_repetitions): repetition dimension not found")
+        print("ERROR (assess_drift): repetition dimension not found")
         raise ValueError(f"Repetition dimension not found (axis 4). im.shape: {im.shape}")
 
     # Bruker often has offcenter data in k-space, so we center it before doing anything else
@@ -302,16 +302,16 @@ def assess_drift(im,fftDim, pe_axis, bval, qa_fig_name=""):
 
     # For now we only correct drift for dwi. Should probably do it for any EPI, but for now this code is mostly used for dti
     if len(bval) == 0:
-        print("WARNING (combine_repetitions): not DWI; skipping drift image shift corrections.")
+        print("WARNING (assess_drift): not DWI; skipping drift image shift corrections.")
         return im
 
     # Check for complext data before continuing
     if not np.iscomplexobj(im):
-        print("WARNING (combine_repetitions): no complex data. Will not assess shifts from drift.")
+        print("WARNING (assess_drift): no complex data. Will not assess shifts from drift.")
         return im
     
     if pe_axis < 0:
-        print("WARNING (combine_repetitions): unknown PE axis. Will not assess shifts from drift.")
+        print("WARNING (assess_drift): unknown PE axis. Will not assess shifts from drift.")
         return im
 
     # Loop through all dwi to find drift for each case

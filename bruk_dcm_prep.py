@@ -89,8 +89,11 @@ def main():
         print("ERROR: image matrix shape mismatch")
         sys.exit(1)
     num_dim3 = np.round(num_dim3).astype('int')
-    # Note that we need to use im_t.shape[0:2] for x and y, because sometimes they are swapped in the nifti releative to im_matrix_xyz_diff_echo_rep which is in RPS coordinates
-    new_shape = im_t.shape[0:2] + (im_matrix_xyz_diff_echo_rep[2],) + (num_dim3,) + (im_matrix_xyz_diff_echo_rep[5],) + (1+hasCoilComplexDoubleDims[2],)
+    # Note that we need to use im_t.shape for x and y (and z for 3D), because sometimes they are swapped in the nifti releative to im_matrix_xyz_diff_echo_rep which is in RPS coordinates
+    if acqDim == 3:
+        new_shape = im_t.shape[0:3] + (num_dim3,) + (im_matrix_xyz_diff_echo_rep[5],) + (1+hasCoilComplexDoubleDims[2],)
+    else:
+        new_shape = im_t.shape[0:2] + (im_matrix_xyz_diff_echo_rep[2],) + (num_dim3,) + (im_matrix_xyz_diff_echo_rep[5],) + (1+hasCoilComplexDoubleDims[2],)
     if hasCoilComplexDoubleDims[1]:
         new_dtype = np.complex64
     else:
